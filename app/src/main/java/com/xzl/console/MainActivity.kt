@@ -494,7 +494,7 @@ private fun QuickToolbar(enabled: Boolean) {
 }
 
 @Composable
-private fun QuickButton(
+private fun RowScope.QuickButton(
     label: String,
     enabled: Boolean,
     bg: Color,
