@@ -632,7 +632,7 @@ private fun ToolRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         ToolButton(label = "安装桌面", onClick = onInstallLawnchair, modifier =Modifier.weight(1f))
-        ToolButton(label = "安装 AVNC", onClick = onInstallAvncmodifier, modifier=Modifier.weight(1f))
+        ToolButton(label = "安装 AVNC", onClick = onInstallAvnc, modifier, modifier=Modifier.weight(1f))
         ToolButton(label = "设为默认", onClick = onSetHome, modifier=Modifier.weight(1f))
     }
 }
