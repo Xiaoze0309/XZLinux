@@ -72,10 +72,10 @@ private val TextOff = Color(0xFF9E9E9E)
 // ===== 可用 Linux 系统列表 =====
 private val SYSTEMS = listOf("Ubuntu 24.04", "Debian 12", "Alpine 3.20")
 
-// ===== 运行后端 =====
+// ===== 运行后端（必须是 public，不能 private，否则 ViewModel 公开属性无法暴露）=====
 enum class RuntimeMode(val label: String) {
     CHROOT("Chroot"),
-    QEMU("QEMU"),
+    PROOT("Proot"),
 }
 
 // ===== Chroot 模式 =====
@@ -98,16 +98,14 @@ class ConsoleViewModel : ViewModel() {
     var isRunning by mutableStateOf(false)
         private set
 
-    // 运行后端：Chroot / QEMU
+    // 运行后端：Chroot / Proot
     var runtimeMode by mutableStateOf(RuntimeMode.CHROOT)
         private set
 
-    // QEMU 选中的镜像
-    var selectedImage by mutableStateOf(RootManager.availableImages.first())
-        private set
-
-    // 免 Root QEMU 日志流（转发自 RootManager）
-    val qemuLogs: StateFlow<String> = RootManager.qemuLogs
+    // 免 Root Proot 日志流（转发自 ProotManager）
+    val prootLogs: StateFlow<String> = ProotManager.prootLogs
+    // 下载进度（转发自 ProotManager）
+    val downloadProgress: StateFlow<Int> = ProotManager.downloadProgress
 
     // Toast 消息队列：UI 通过 LaunchedEffect 消费
     private val _message = mutableStateOf<String?>(null)
@@ -118,7 +116,6 @@ class ConsoleViewModel : ViewModel() {
     fun onSystemSelect(sys: String) { selectedSystem = sys }
     fun onModeChange(desktop: Boolean) { isXZFace = desktop }
     fun onRuntimeModeChange(mode: RuntimeMode) { runtimeMode = mode }
-    fun onImageSelect(image: String) { selectedImage = image }
     fun onSshChange(v: Boolean) { sshEnabled = v }
     fun onVncChange(v: Boolean) { vncEnabled = v }
 
@@ -163,10 +160,17 @@ class ConsoleViewModel : ViewModel() {
                 if (out.contains(START_SUCCESS)) { isRunning = true; "✅ Chroot 已启动" }
                 else { isRunning = false; "❌ Chroot 启动失败\n$out" }
             }
-            RuntimeMode.QEMU -> {
-                val msg = RootManager.startQemuVM(context, selectedImage)
-                isRunning = msg.contains("成功")
-                msg
+            RuntimeMode.PROOT -> {
+                // 先确保 rootfs 就绪（未就绪则自动下载并解压），再启动 proot
+                val prepared = ProotManager.prepareRootfs(context)
+                if (!prepared) {
+                    isRunning = false
+                    "❌ rootfs 未就绪，启动中止"
+                } else {
+                    val msg = ProotManager.startProot(context)
+                    isRunning = msg.contains("成功")
+                    msg
+                }
             }
         }
 
@@ -177,8 +181,8 @@ class ConsoleViewModel : ViewModel() {
                 if (out.contains(STOP_SUCCESS)) { isRunning = false; "✅ Chroot 已停止" }
                 else { isRunning = false; "❌ Chroot 停止失败\n$out" }
             }
-            RuntimeMode.QEMU -> {
-                val msg = RootManager.stopQemuVM()
+            RuntimeMode.PROOT -> {
+                val msg = ProotManager.stopProot()
                 isRunning = false
                 msg
             }
@@ -188,7 +192,8 @@ class ConsoleViewModel : ViewModel() {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        RootManager.init(this) // 设置全局上下文，供 filesDir 容错使用
+        RootManager.init(this)    // 设置全局上下文，供 filesDir 容错使用
+        ProotManager.init(this)   // 设置全局上下文，供 proot 使用
         setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 XzlConsoleApp()
@@ -203,8 +208,8 @@ class MainActivity : ComponentActivity() {
 fun XzlConsoleApp(viewModel: ConsoleViewModel = viewModel()) {
     val context = LocalContext.current
     var showSystemSheet by rememberSaveable { mutableStateOf(false) }
-    var showImageSheet by rememberSaveable { mutableStateOf(false) }
-    val logText by viewModel.qemuLogs.collectAsState()
+    val logText by viewModel.prootLogs.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
 
     // 消费 ViewModel 里的 Toast 消息
     LaunchedEffect(viewModel.message) {
@@ -234,13 +239,11 @@ fun XzlConsoleApp(viewModel: ConsoleViewModel = viewModel()) {
             selectedSystem = viewModel.selectedSystem,
             isXZFace = viewModel.isXZFace,
             runtimeMode = viewModel.runtimeMode,
-            selectedImage = viewModel.selectedImage,
             sshEnabled = viewModel.sshEnabled,
             vncEnabled = viewModel.vncEnabled,
             onDropdownClick = { showSystemSheet = true },
             onModeChange = viewModel::onModeChange,
             onRuntimeModeChange = viewModel::onRuntimeModeChange,
-            onImageDropdownClick = { showImageSheet = true },
             onSshChange = viewModel::onSshChange,
             onVncChange = viewModel::onVncChange,
         )
@@ -256,9 +259,9 @@ fun XzlConsoleApp(viewModel: ConsoleViewModel = viewModel()) {
 
         Spacer(Modifier.height(16.dp))
 
-        // ========== 4.5 QEMU 终端日志面板 ==========
-        if (viewModel.runtimeMode == RuntimeMode.QEMU) {
-            QemuLogPanel(text = logText)
+        // ========== 4.5 Proot 终端日志面板 ==========
+        if (viewModel.runtimeMode == RuntimeMode.PROOT) {
+            ProotLogPanel(text = logText, progress = downloadProgress)
             Spacer(Modifier.height(16.dp))
         }
 
@@ -310,42 +313,6 @@ fun XzlConsoleApp(viewModel: ConsoleViewModel = viewModel()) {
             }
         }
     }
-
-    // ===== 镜像选择 ModalBottomSheet =====
-    if (showImageSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showImageSheet = false },
-            containerColor = Comp,
-        ) {
-            Column(Modifier.padding(bottom = 32.dp)) {
-                Text(
-                    "选择 QEMU 镜像",
-                    color = TextOn,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                )
-                RootManager.availableImages.forEach { img ->
-                    val isSelected = img == viewModel.selectedImage
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { viewModel.onImageSelect(img); showImageSheet = false }
-                            .background(if (isSelected) Accent.copy(alpha = 0.12f) else Color.Transparent)
-                            .padding(horizontal = 20.dp, vertical = 16.dp),
-                    ) {
-                        Text(
-                            img,
-                            color = if (isSelected) Accent else TextOn,
-                            fontSize = 16.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        )
-                    }
-                }
-            }
-        }
-    }
 }
 
 // ========== 1. 顶部栏 ==========
@@ -378,13 +345,11 @@ private fun ConfigPanel(
     selectedSystem: String,
     isXZFace: Boolean,
     runtimeMode: RuntimeMode,
-    selectedImage: String,
     sshEnabled: Boolean,
     vncEnabled: Boolean,
     onDropdownClick: () -> Unit,
     onModeChange: (Boolean) -> Unit,
     onRuntimeModeChange: (RuntimeMode) -> Unit,
-    onImageDropdownClick: () -> Unit,
     onSshChange: (Boolean) -> Unit,
     onVncChange: (Boolean) -> Unit,
 ) {
@@ -438,7 +403,7 @@ private fun ConfigPanel(
 
             Spacer(Modifier.height(16.dp))
 
-            // 运行后端：Chroot / QEMU
+            // 运行后端：Chroot / Proot
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -456,37 +421,13 @@ private fun ConfigPanel(
                 )
                 Spacer(Modifier.width(8.dp))
                 ModeRadio(
-                    label = "QEMU",
-                    selected = runtimeMode == RuntimeMode.QEMU,
-                    onSelect = { onRuntimeModeChange(RuntimeMode.QEMU) },
+                    label = "Proot",
+                    selected = runtimeMode == RuntimeMode.PROOT,
+                    onSelect = { onRuntimeModeChange(RuntimeMode.PROOT) },
                 )
             }
 
             Spacer(Modifier.height(16.dp))
-
-            // QEMU 镜像选择
-            if (runtimeMode == RuntimeMode.QEMU) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        "镜像: $selectedImage",
-                        color = TextOn,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    IconButton(onClick = onImageDropdownClick) {
-                        Icon(
-                            Icons.Filled.KeyboardArrowDown,
-                            contentDescription = "切换镜像",
-                            tint = Accent,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
 
             // 底部：两个开关
             Row(
@@ -582,9 +523,9 @@ private fun MainActionButton(isRunning: Boolean, onClick: () -> Unit) {
     }
 }
 
-// ========== 4.5 QEMU 终端日志面板 ==========
+// ========== 4.5 Proot 终端日志面板 ==========
 @Composable
-private fun QemuLogPanel(text: String) {
+private fun ProotLogPanel(text: String, progress: Int) {
     val scrollState = rememberScrollState()
     // 实时日志时自动滚动到底部
     LaunchedEffect(text) {
@@ -603,6 +544,14 @@ private fun QemuLogPanel(text: String) {
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
         )
+        if (progress in 1..99) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "⏳ 正在下载 rootfs: $progress%",
+                color = Accent,
+                fontSize = 12.sp,
+            )
+        }
         Spacer(Modifier.height(8.dp))
         Box(
             modifier = Modifier
@@ -611,7 +560,7 @@ private fun QemuLogPanel(text: String) {
                 .verticalScroll(scrollState),
         ) {
             Text(
-                if (text.isBlank()) "「暂无日志」\nQEMU 启动后此处会实时回显输出" else text,
+                if (text.isBlank()) "「暂无日志」\nProot 启动后此处会实时回显输出" else text,
                 color = TextOn,
                 fontSize = 11.sp,
                 fontFamily = FontFamily.Monospace,
@@ -631,14 +580,31 @@ private fun ToolRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        ToolButton(label = "安装桌面", onClick = onInstallLawnchair, modifier =Modifier.weight(1f))
-        ToolButton(label = "安装 AVNC", onClick = onInstallAvnc, modifier=Modifier.weight(1f))
-        ToolButton(label = "设为默认", onClick = onSetHome, modifier=Modifier.weight(1f))
+        // 防坑：weight 只在 Row/Column 作用域可用，由调用方通过 modifier 传入
+        ToolButton(
+            label = "安装桌面",
+            modifier = Modifier.weight(1f),
+            onClick = onInstallLawnchair,
+        )
+        ToolButton(
+            label = "安装 AVNC",
+            modifier = Modifier.weight(1f),
+            onClick = onInstallAvnc,
+        )
+        ToolButton(
+            label = "设为默认",
+            modifier = Modifier.weight(1f),
+            onClick = onSetHome,
+        )
     }
 }
 
 @Composable
-private fun ToolButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ToolButton(
+    label: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     Box(
         modifier = modifier
             .height(44.dp)
@@ -661,8 +627,22 @@ private fun QuickToolbar(enabled: Boolean) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        QuickButton(label = "打开终端", enabled = enabled, bg = bg, fg = fg, modifier =Modifier.weight(1f), onClick = {})
-        QuickButton(label = "连接 XZFace", enabled = enabled, bg = bg, fg = fg, modifier =Modifier.weight(1f), onClick = {})
+        QuickButton(
+            label = "打开终端",
+            enabled = enabled,
+            bg = bg,
+            fg = fg,
+            modifier = Modifier.weight(1f),
+            onClick = {},
+        )
+        QuickButton(
+            label = "连接 XZFace",
+            enabled = enabled,
+            bg = bg,
+            fg = fg,
+            modifier = Modifier.weight(1f),
+            onClick = {},
+        )
     }
 }
 
