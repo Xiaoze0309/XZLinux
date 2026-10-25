@@ -73,7 +73,7 @@ private val TextOff = Color(0xFF9E9E9E)
 private val SYSTEMS = listOf("Ubuntu 24.04", "Debian 12", "Alpine 3.20")
 
 // ===== 运行后端 =====
-private enum class RuntimeMode(val label: String) {
+enum class RuntimeMode(val label: String) {
     CHROOT("Chroot"),
     QEMU("QEMU"),
 }
@@ -631,17 +631,16 @@ private fun ToolRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        ToolButton(label = "安装桌面", onClick = onInstallLawnchair)
-        ToolButton(label = "安装 AVNC", onClick = onInstallAvnc)
-        ToolButton(label = "设为默认", onClick = onSetHome)
+        ToolButton(label = "安装桌面", onClick = onInstallLawnchair, modifier =Modifier.weight(1f))
+        ToolButton(label = "安装 AVNC", onClick = onInstallAvncmodifier, modifier=Modifier.weight(1f))
+        ToolButton(label = "设为默认", onClick = onSetHome, modifier=Modifier.weight(1f))
     }
 }
 
 @Composable
-private fun ToolButton(label: String, onClick: () -> Unit) {
+private fun ToolButton(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(
-        modifier = Modifier
-            .weight(1f)
+        modifier = modifier
             .height(44.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(CompBorder)
@@ -662,8 +661,8 @@ private fun QuickToolbar(enabled: Boolean) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        QuickButton(label = "打开终端", enabled = enabled, bg = bg, fg = fg, onClick = {})
-        QuickButton(label = "连接 XZFace", enabled = enabled, bg = bg, fg = fg, onClick = {})
+        QuickButton(label = "打开终端", enabled = enabled, bg = bg, fg = fg, modifier =Modifier.weight(1f), onClick = {})
+        QuickButton(label = "连接 XZFace", enabled = enabled, bg = bg, fg = fg, modifier =Modifier.weight(1f), onClick = {})
     }
 }
 
@@ -673,11 +672,11 @@ private fun QuickButton(
     enabled: Boolean,
     bg: Color,
     fg: Color,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     Box(
-        modifier = Modifier
-            .weight(1f)
+        modifier = modifier
             .height(72.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(bg)
