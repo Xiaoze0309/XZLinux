@@ -224,8 +224,7 @@ object RootManager {
                 val process = pb.start()
 
                 qemuProcess = process
-                qemuPid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) process.pid() else -1L
-
+                
                 _qemuLogs.value = "▶ QEMU 已启动 (PID=${if (qemuPid > 0) qemuPid else "未知"})\n"
 
                 // 后台协程循环读日志 -> 实时回显
